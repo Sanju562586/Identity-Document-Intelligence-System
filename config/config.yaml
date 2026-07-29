@@ -1,0 +1,154 @@
+# ============================================================
+# Identity Document Intelligence System — Central Config
+# ============================================================
+
+project:
+  name: "identity-doc-intelligence"
+  version: "1.0.0"
+  seed: 42
+
+paths:
+  data_root: "data"
+  raw_assets: "data/raw"
+  synthetic: "data/synthetic"
+  splits: "data/splits"
+  checkpoints: "checkpoints"
+  outputs: "outputs"
+  logs: "logs"
+
+# ----------------------------------------------------------
+# Stage 1 — Synthetic Data Factory
+# ----------------------------------------------------------
+stage1:
+  n_total: 5000
+  class_distribution:
+    genuine: 0.70       # 3500 images
+    spliced: 0.15       # 750 images
+    photocopied: 0.15   # 750 images
+  card_types:
+    - driving_licence
+    - aadhaar
+    - bank_statement
+  image_size: [640, 400]  # (width, height) in pixels
+  dpi: 150
+  degradation_severity_levels: [1, 2, 3]   # 1=mild, 2=medium, 3=severe
+  max_degradations_per_image: 3
+  fonts:
+    regular: "data/raw/fonts/DejaVuSans.ttf"
+    bold: "data/raw/fonts/DejaVuSans-Bold.ttf"
+    mono: "data/raw/fonts/DejaVuSansMono.ttf"
+
+# ----------------------------------------------------------
+# Stage 2 — OCR Benchmark
+# ----------------------------------------------------------
+stage2:
+  engines:
+    - tesseract
+    - easyocr
+    - trocr
+    # - paddleocr  # optional, large install
+  trocr_model: "microsoft/trocr-large-printed"
+  trocr_finetune:
+    epochs: 3
+    batch_size: 8
+    learning_rate: 5.0e-5
+    warmup_steps: 100
+    output_dir: "checkpoints/trocr-finetuned"
+  benchmark_sample_size: 500   # images to benchmark per engine
+
+# ----------------------------------------------------------
+# Stage 3 — VLM SFT
+# ----------------------------------------------------------
+stage3:
+  model_id: "google/paligemma-3b-pt-224"
+  model_id_fallback: "Qwen/Qwen2-VL-2B-Instruct"
+  use_fallback: false          # set true if no PaliGemma access
+  quantization: "4bit"         # 4bit | 8bit | none
+  lora:
+    r: 16
+    lora_alpha: 32
+    target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]
+    lora_dropout: 0.05
+    bias: "none"
+  training:
+    num_epochs: 3
+    per_device_train_batch_size: 4
+    gradient_accumulation_steps: 8
+    learning_rate: 2.0e-4
+    lr_scheduler: "cosine"
+    warmup_steps: 100
+    fp16: true
+    gradient_checkpointing: true
+    save_steps: 200
+    logging_steps: 50
+    max_seq_length: 512
+    output_dir: "checkpoints/vlm-sft"
+  inference:
+    max_new_tokens: 512
+    num_beams: 1
+    temperature: 0.0
+
+# ----------------------------------------------------------
+# Stage 4 — Forgery Detection Head
+# ----------------------------------------------------------
+stage4:
+  vision_encoder_dim: 1152     # PaliGemma / SigLIP encoder dim
+  ela_quality: 90
+  ela_amplify: 10
+  ela_cnn_out_dim: 256
+  mlp_hidden_dims: [512, 128]
+  training:
+    num_epochs: 20
+    batch_size: 32
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-4
+    class_weights: [1.0, 2.33]  # genuine, forged
+    label_smoothing: 0.1
+    output_dir: "checkpoints/forgery-head"
+  gradcam_samples: 50
+
+# ----------------------------------------------------------
+# Stage 5 — DPO Alignment
+# ----------------------------------------------------------
+stage5:
+  beta: 0.1
+  loss_type: "sigmoid"
+  max_length: 512
+  training:
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 16
+    learning_rate: 5.0e-5
+    num_epochs: 1
+    output_dir: "checkpoints/vlm-dpo"
+  preference:
+    cer_rejection_threshold: 0.3   # SFT outputs with CER > this become rejected
+
+# ----------------------------------------------------------
+# Stage 6 — Eval Harness
+# ----------------------------------------------------------
+stage6:
+  degradation_types:
+    - blur
+    - jpeg_compression
+    - perspective_warp
+    - ink_bleed
+    - low_dpi
+    - occlusion
+    - rotation
+    - shadow
+  severity_levels: [1, 2, 3]
+  n_per_condition: 50           # images evaluated per condition
+  latency_warmup_runs: 5
+  latency_benchmark_runs: 100
+  output_dir: "outputs/eval_harness"
+  model_card_out: "outputs/model_card.md"
+  hf_hub_repo: ""               # fill in your HF Hub repo name
+
+# ----------------------------------------------------------
+# W&B
+# ----------------------------------------------------------
+wandb:
+  project: "identity-doc-intelligence"
+  entity: ""                    # your W&B entity/username
+  log_images: true
+  log_tables: true

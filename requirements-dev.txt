@@ -1,0 +1,8 @@
+# ── Dev-only dependencies ───────────────────────────────────
+pytest>=8.0.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.5.0       # parallel test execution
+black>=24.0.0              # code formatting
+ruff>=0.3.0                # fast linting
+mypy>=1.9.0                # type checking
+ipykernel>=6.29.0          # notebook support
